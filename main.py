@@ -1,7 +1,7 @@
 # main.py
-# TONKHO_ODOO_BOT – Final Stable Version (Render)
+# TONKHO_ODOO_BOT – Final Stable Version (Render, Fixed Min Stock HN = 50)
 # Author: Anh Hoàn
-# Version: 2025-10-31
+# Version: 2025-11-01
 
 import os
 import re
@@ -27,6 +27,9 @@ WEBHOOK_PATH = f"/tg/webhook/{BOT_TOKEN}"
 WEBHOOK_URL  = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
 PORT = int(os.getenv("PORT", "10000"))
 
+# Ngưỡng tồn kho tối thiểu tại HN
+MIN_STOCK_HN = 50
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("tonkho")
 
@@ -50,9 +53,7 @@ def extract_location_code(loc_upper: str):
     return None
 
 def classify_location(loc_name_raw: str):
-    """
-    Trả về nhóm kho: HN, HCM, THANHLY_HN, THANHLY_HCM, NHAP_HN, OTHER
-    """
+    """Xác định nhóm kho"""
     if not loc_name_raw:
         return "OTHER"
     loc = re.sub(r'\s+', ' ', str(loc_name_raw).strip().upper())
@@ -96,7 +97,7 @@ def odoo_connect():
         logger.error(f"Lỗi kết nối Odoo: {e}")
         return None, None
 
-# ===================== LẤY TỒN KHO THEO MÃ =====================
+# ===================== TRA TỒN KHO =====================
 def get_stock_info(sku: str):
     uid, models = odoo_connect()
     if not uid:
@@ -142,18 +143,30 @@ def get_stock_info(sku: str):
             simplified_details.append((loc_name, available, cls))
 
         total = sum(summary.values())
+        hn, hcm = summary["HN"], summary["HCM"]
+
+        # ====== ĐỀ XUẤT CHUYỂN HÀNG ======
+        chuyen = 0
+        if hn < MIN_STOCK_HN:
+            chuyen = round(MIN_STOCK_HN - hn)
 
         lines = [
             f"📦 *{sku}*",
             f"📊 Tổng khả dụng: *{total:.0f}*",
-            f"1️⃣ Tồn kho HN: {summary['HN']:.0f}",
-            f"2️⃣ Tồn kho HCM: {summary['HCM']:.0f}",
+            f"1️⃣ Tồn kho HN: {hn:.0f}",
+            f"2️⃣ Tồn kho HCM: {hcm:.0f}",
             f"3️⃣ Kho nhập HN: {summary['NHAP_HN']:.0f}",
             f"4️⃣ Kho thanh lý HN: {summary['THANHLY_HN']:.0f}",
             f"5️⃣ Kho thanh lý HCM: {summary['THANHLY_HCM']:.0f}",
         ]
 
-        # ======== HIỂN THỊ RÚT GỌN CHI TIẾT THEO VỊ TRÍ ========
+        # Đề xuất
+        if chuyen > 0:
+            lines.append(f"\n💡 Đề xuất chuyển thêm *{chuyen} sp* ra HN để đạt mức tồn tối thiểu {MIN_STOCK_HN}.")
+        else:
+            lines.append("\n✅ Tồn HN đạt mức tối thiểu, không cần chuyển thêm hàng.")
+
+        # Rút gọn hiển thị
         shown = [d for d in simplified_details if abs(d[1]) > 0.5]
         if shown:
             lines.append("")
@@ -167,17 +180,18 @@ def get_stock_info(sku: str):
         logger.error(f"Lỗi đọc tồn {sku}: {e}")
         return f"❌ Lỗi đọc dữ liệu: {e}"
 
-# ===================== CÁC LỆNH TELEGRAM =====================
+# ===================== TELEGRAM HANDLERS =====================
 @dp.message_handler(commands=["start", "help"])
 async def start_cmd(m: types.Message):
     msg = (
-        "🤖 Bot kiểm tra tồn kho trực tiếp từ Odoo.\n\n"
-        "Các lệnh:\n"
-        "• /ton <MÃ_HÀNG> — Tra tồn kho realtime.\n"
-        "• /tongo — Tổng tồn theo nhóm kho (HN, HCM, thanh lý, nhập HN).\n"
-        "• /thongkehn — Xuất CSV thống kê tồn tại HN.\n"
-        "• /dexuatnhap [minPercent] — Đề xuất nhập HN nếu HN < tỷ lệ HCM.\n\n"
-        "Lưu ý: 'Có hàng' = Hiện có - Reserved (tương ứng cột 'Có hàng' trên Odoo)."
+        "🤖 BOT KIỂM TRA TỒN KHO (Odoo Realtime)\n\n"
+        "Các lệnh khả dụng:\n"
+        "• /ton <MÃ_HÀNG> — Tra tồn kho realtime và đề xuất chuyển ra HN.\n"
+        "• /tongo — Tổng hợp tồn toàn hệ thống (HN, HCM, nhập, thanh lý).\n"
+        "• /thongkehn — Xuất file thống kê tồn tại HN.\n"
+        "• /dexuatnhap — Xuất file đề xuất nhập hàng cho HN.\n\n"
+        f"Ngưỡng tối thiểu tồn kho HN hiện tại: {MIN_STOCK_HN} sản phẩm.\n"
+        "Tính theo cột 'Có hàng' = Số lượng - Reserved trong Odoo."
     )
     await m.reply(msg)
 

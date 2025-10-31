@@ -1,6 +1,6 @@
 # main.py
-# TONKHO_ODOO_BOT – Telegram ↔ Odoo ERP Integration (Real-time, grouped warehouses)
-# Author: Anh Hoàn – Version 2025.10.31 (Render-ready)
+# TONKHO_ODOO_BOT – Telegram ↔ Odoo ERP Integration (Realtime)
+# Author: Anh Hoàn – Version 2025.10.31 (Render-stable)
 
 import os
 import logging
@@ -54,17 +54,21 @@ def get_stock_info(sku: str):
 
     try:
         # Tìm sản phẩm theo mã SKU
-        pid = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
-                                'product.product', 'search',
-                                [[['default_code', '=', sku]]])
+        pid = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASS,
+            'product.product', 'search',
+            [[['default_code', '=', sku]]]
+        )
         if not pid:
             return f"❌ Không tìm thấy mã hàng *{sku}*"
 
         # Lấy danh sách tồn kho thực tế
-        quants = models.execute_kw(ODOO_DB, uid, ODOO_PASS,
-                                   'stock.quant', 'search_read',
-                                   [[['product_id', 'in', pid]]],
-                                   {'fields': ['location_id', 'quantity', 'reserved_quantity']})
+        quants = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASS,
+            'stock.quant', 'search_read',
+            [[['product_id', 'in', pid]]],
+            {'fields': ['location_id', 'quantity', 'reserved_quantity']}
+        )
         if not quants:
             return f"⚠️ Không có dữ liệu tồn cho *{sku}*"
 
@@ -100,12 +104,12 @@ def get_stock_info(sku: str):
 
         lines = [
             f"📦 *{sku}*",
+            f"Tổng khả dụng: *{total:.0f}*",
             f"1️⃣ Tồn kho HN: {summary['HN']:.0f}",
             f"2️⃣ Tồn kho HCM: {summary['HCM']:.0f}",
             f"3️⃣ Kho nhập HN: {summary['NHẬP HN']:.0f}",
             f"4️⃣ Kho thanh lý HN: {summary['THANH LÝ HN']:.0f}",
-            f"5️⃣ Kho thanh lý HCM: {summary['THANH LÝ HCM']:.0f}",
-            f"— Tổng khả dụng: *{total:.0f}*"
+            f"5️⃣ Kho thanh lý HCM: {summary['THANH LÝ HCM']:.0f}"
         ]
 
         return "\n".join(lines)
@@ -119,7 +123,7 @@ def get_stock_info(sku: str):
 async def help_cmd(m: types.Message):
     await m.reply(
         "🤖 Bot kiểm tra tồn kho trực tiếp từ Odoo.\n"
-        "Dùng lệnh:\n`/ton <MÃ_HÀNG>` hoặc gõ mã hàng bất kỳ.",
+        "Dùng:\n`/ton <MÃ_HÀNG>` hoặc gõ mã hàng bất kỳ để tra nhanh.",
         parse_mode="Markdown"
     )
 
@@ -141,9 +145,15 @@ async def any_text(m: types.Message):
 
 # ===================== WEBHOOK SERVER =====================
 async def handle_webhook(request: web.Request):
+    from aiogram import Bot
     try:
         data = await request.json()
         update = types.Update(**data)
+
+        # FIX CONTEXT (bắt buộc khi dùng aiohttp custom server)
+        Bot.set_current(bot)
+        dp.bot = bot
+
         await dp.process_update(update)
     except Exception as e:
         logging.exception(f"Lỗi xử lý update: {e}")

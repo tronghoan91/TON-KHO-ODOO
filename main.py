@@ -124,8 +124,8 @@ async def cmd_start(message: types.Message):
         "🤖 *BOT TRA CỨU TỒN KHO ODOO*\n\n"
         "Các lệnh hỗ trợ:\n"
         "• /ton <MÃ SP> — tra tồn kho trực tiếp từ Odoo\n"
-        "• /thongkehn — xuất thống kê tồn HN/HCM\n"
-        "• /dexuatnhap — xuất danh sách đề xuất nhập hàng HN\n\n"
+        "• /thongkehn — xuất thống kê tồn HN/HCM (toàn bộ SP)\n"
+        "• /dexuatnhap — danh sách đề xuất nhập hàng HN (thiếu hàng)\n\n"
         "_Toàn bộ dữ liệu cập nhật realtime từ hệ thống Odoo_",
         parse_mode="Markdown"
     )
@@ -160,47 +160,93 @@ async def cmd_ton(message: types.Message):
 
     await message.answer(text, parse_mode="Markdown")
 
+# =========================================================
+# 📊 THỐNG KÊ TỒN TOÀN BỘ
+# =========================================================
 @dp.message(Command("thongkehn"))
 async def cmd_thongkehn(message: types.Message):
-    await message.reply("⏳ Đang tổng hợp dữ liệu thống kê HN/HCM...")
-    products = ["AC-281", "MK-5170", "MK-332"]  # có thể thay bằng list thực tế
+    await message.reply("⏳ Đang tổng hợp dữ liệu tồn kho tất cả sản phẩm, vui lòng chờ...")
+
+    uid, models = get_odoo_connection()
+    products = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS,
+        'product.product', 'search_read',
+        [[['default_code', '!=', False]]],
+        {'fields': ['default_code', 'name'], 'limit': 0}
+    )
+
     stock_list = []
-    for code in products:
+    for p in products:
+        code = p["default_code"]
         data = await fetch_stock_from_odoo(code)
         if not data:
             continue
         summary, _ = summarize_stock(data)
-        stock_list.append({"code": code, **summary, "total": sum(summary.values())})
+        total = sum(summary.values())
+        stock_list.append({
+            "code": code,
+            "name": p["name"],
+            **summary,
+            "total": total
+        })
 
-    path = await create_csv_stock(stock_list, "thongkehn.csv")
+    path = "/tmp/thongkehn.csv"
+    with open(path, "w", newline='', encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Mã SP", "Tên SP", "Tồn 201 (HN)", "Tồn 124 (HCM)",
+                         "Tồn nhập HN", "TL HN", "TL HCM", "Khác", "Tổng tồn"])
+        for row in stock_list:
+            writer.writerow([
+                row["code"], row["name"], row["HN"], row["HCM"], row["NHAPHN"],
+                row["THANHLYHN"], row["THANHLYHCM"], row["OTHER"], row["total"]
+            ])
+
     file = FSInputFile(path)
-    await message.answer_document(file, caption="📈 Báo cáo thống kê tồn HN/HCM")
+    await message.answer_document(file, caption="📈 Báo cáo thống kê tồn HN/HCM (Full)")
 
+# =========================================================
+# 📥 ĐỀ XUẤT NHẬP HÀNG HN
+# =========================================================
 @dp.message(Command("dexuatnhap"))
 async def cmd_dexuatnhap(message: types.Message):
-    await message.reply("⏳ Đang tạo danh sách đề xuất nhập hàng HN...")
-    products = ["AC-281", "MK-5170", "MK-332"]
-    stock_list = []
-    for code in products:
+    await message.reply("⏳ Đang tổng hợp danh sách đề xuất nhập hàng HN...")
+
+    uid, models = get_odoo_connection()
+    products = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASS,
+        'product.product', 'search_read',
+        [[['default_code', '!=', False]]],
+        {'fields': ['default_code', 'name'], 'limit': 0}
+    )
+
+    results = []
+    for p in products:
+        code = p["default_code"]
         data = await fetch_stock_from_odoo(code)
         if not data:
             continue
         summary, _ = summarize_stock(data)
         hn = summary["HN"]
-        missing = max(0, 50 - hn)
-        stock_list.append({"code": code, **summary, "need_move": missing, "total": sum(summary.values())})
+        need = max(0, 50 - hn)
+        if need > 0:
+            results.append({
+                "code": code,
+                "name": p["name"],
+                "hn": hn,
+                "need": need,
+                "hcm": summary["HCM"],
+                "total": sum(summary.values())
+            })
 
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Mã SP", "Tồn HN", "Thiếu để đạt 50", "Tồn HCM", "Tổng tồn"])
-    for row in stock_list:
-        writer.writerow([row["code"], row["HN"], row["need_move"], row["HCM"], row["total"]])
     path = "/tmp/dexuatnhap.csv"
-    with open(path, "w", newline='', encoding="utf-8") as f:
-        f.write(output.getvalue())
+    with open(path, "w", newline='', encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Mã SP", "Tên SP", "Tồn HN", "Thiếu để đạt 50", "Tồn HCM", "Tổng tồn"])
+        for r in results:
+            writer.writerow([r["code"], r["name"], r["hn"], r["need"], r["hcm"], r["total"]])
 
     file = FSInputFile(path)
-    await message.answer_document(file, caption="📥 Danh sách đề xuất nhập hàng HN")
+    await message.answer_document(file, caption="📥 Danh sách đề xuất nhập hàng HN (Full)")
 
 # =========================================================
 # 🌐 WEBHOOK
